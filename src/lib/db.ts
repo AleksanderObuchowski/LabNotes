@@ -58,8 +58,6 @@ export function ensureSchema(): Promise<void> {
            ON notes(project_id, experiment)`,
         `CREATE INDEX IF NOT EXISTS idx_notes_project_metric
            ON notes(project_id, metric)`,
-        `CREATE INDEX IF NOT EXISTS idx_notes_project_kind
-           ON notes(project_id, kind)`,
         `CREATE TABLE IF NOT EXISTS api_tokens (
           id TEXT PRIMARY KEY,
           user_login TEXT NOT NULL,
@@ -94,6 +92,11 @@ export function ensureSchema(): Promise<void> {
     } catch {
       /* column already exists */
     }
+    // Index on `kind` must come AFTER the migration above — on a pre-existing DB
+    // the column doesn't exist until the ALTER runs.
+    await c.execute(
+      `CREATE INDEX IF NOT EXISTS idx_notes_project_kind ON notes(project_id, kind)`,
+    );
   })();
   return _ready;
 }
