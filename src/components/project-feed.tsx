@@ -10,11 +10,13 @@ import {
   CircleDashed,
   FileText,
   GitBranch,
+  Link2,
   ListFilter,
   Search,
 } from "lucide-react";
-import type { Note } from "@/lib/types";
+import { NOTE_KINDS, type Note, type NoteKind } from "@/lib/types";
 import { AddNoteDialog } from "@/components/add-note-dialog";
+import { KindBadge, KIND_META } from "@/components/kind-badge";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -61,7 +63,10 @@ function DeltaCell({ metric, value, delta }: Pick<Note, "metric" | "value" | "de
   );
 }
 
-function StatusCell({ verified }: { verified: boolean }) {
+function StatusCell({ note }: { note: Note }) {
+  // "verified" tracks commit existence; research notes have no commit, so it's N/A.
+  if (note.kind === "research") return <span className="text-muted-foreground">—</span>;
+  const verified = note.verified;
   return verified ? (
     <span className="inline-flex items-center gap-1.5 text-sm">
       <CheckCircle2 className="size-4 text-emerald-500" />
@@ -81,10 +86,17 @@ function NoteRow({ note, onSelect }: { note: Note; onSelect: (n: Note) => void }
     <TableRow className="cursor-pointer" onClick={() => onSelect(note)}>
       <TableCell className="max-w-[460px]">
         <div className="flex items-center gap-2">
+          <KindBadge kind={note.kind} className="shrink-0" />
           {note.experiment ? (
             <Badge variant="outline" className="shrink-0 font-normal text-muted-foreground">
               {note.experiment}
             </Badge>
+          ) : null}
+          {note.refs.length ? (
+            <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
+              <Link2 className="size-3" />
+              {note.refs.length}
+            </span>
           ) : null}
           <span className="truncate font-medium">{note.title}</span>
         </div>
@@ -102,7 +114,7 @@ function NoteRow({ note, onSelect }: { note: Note; onSelect: (n: Note) => void }
       <TableCell>
         <DeltaCell metric={note.metric} value={note.value} delta={note.delta} />
       </TableCell>
-      <TableCell><StatusCell verified={note.verified} /></TableCell>
+      <TableCell><StatusCell note={note} /></TableCell>
       <TableCell className="text-muted-foreground">@{note.author_login}</TableCell>
       <TableCell className="text-muted-foreground">{date}</TableCell>
       <TableCell className="text-right">
@@ -134,16 +146,22 @@ export function ProjectFeed({
   canWrite: boolean;
 }) {
   const [q, setQ] = useState("");
+  const [kind, setKind] = useState<NoteKind | typeof ALL>(ALL);
   const [metric, setMetric] = useState(ALL);
   const [verified, setVerified] = useState(ALL);
   const [grouped, setGrouped] = useState(false);
   const [selected, setSelected] = useState<Note | null>(null);
 
+  const byId = useMemo(() => new Map(notes.map((n) => [n.id, n])), [notes]);
   const metrics = useMemo(
     () => Array.from(new Set(notes.map((n) => n.metric).filter(Boolean))) as string[],
     [notes],
   );
-  const verifiedCount = useMemo(() => notes.filter((n) => n.verified).length, [notes]);
+  const kindCounts = useMemo(() => {
+    const c: Record<NoteKind, number> = { finding: 0, research: 0, devlog: 0 };
+    for (const n of notes) c[n.kind]++;
+    return c;
+  }, [notes]);
   const experimentCount = useMemo(
     () => new Set(notes.map((n) => n.experiment).filter(Boolean)).size,
     [notes],
@@ -153,12 +171,13 @@ export function ProjectFeed({
     const ql = q.trim().toLowerCase();
     return notes.filter((n) => {
       if (ql && !`${n.title} ${n.text ?? ""}`.toLowerCase().includes(ql)) return false;
+      if (kind !== ALL && n.kind !== kind) return false;
       if (metric !== ALL && n.metric !== metric) return false;
       if (verified === "yes" && !n.verified) return false;
       if (verified === "no" && n.verified) return false;
       return true;
     });
-  }, [notes, q, metric, verified]);
+  }, [notes, q, kind, metric, verified]);
 
   const groups = useMemo(() => {
     const m = new Map<string, Note[]>();
@@ -177,7 +196,8 @@ export function ProjectFeed({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{repo}</h1>
           <p className="text-sm text-muted-foreground">
-            {notes.length} findings · {verifiedCount} verified · {experimentCount} experiments ·{" "}
+            {kindCounts.finding} findings · {kindCounts.research} research ·{" "}
+            {kindCounts.devlog} devlogs · {experimentCount} experiments ·{" "}
             <Link
               href={`/api/v1/digest?project=${repo}`}
               className="underline decoration-dotted hover:text-foreground"
@@ -187,7 +207,7 @@ export function ProjectFeed({
             </Link>
           </p>
         </div>
-        {canWrite ? <AddNoteDialog repo={repo} /> : null}
+        {canWrite ? <AddNoteDialog repo={repo} notes={notes} /> : null}
       </div>
 
       {/* Panel */}
@@ -197,12 +217,23 @@ export function ProjectFeed({
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Filter findings…"
+              placeholder="Filter notes…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               className="h-9 w-[230px] pl-8"
             />
           </div>
+          <Select value={kind} onValueChange={(v) => setKind(v as NoteKind | typeof ALL)}>
+            <SelectTrigger size="sm" className="h-9">
+              <SelectValue placeholder="Kind" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All kinds</SelectItem>
+              {NOTE_KINDS.map((k) => (
+                <SelectItem key={k} value={k}>{KIND_META[k].label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={metric} onValueChange={setMetric}>
             <SelectTrigger size="sm" className="h-9">
               <ListFilter className="size-4" />
@@ -238,13 +269,13 @@ export function ProjectFeed({
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center gap-2 p-12 text-center">
             <FileText className="size-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No matching findings.</p>
+            <p className="text-sm text-muted-foreground">No matching notes.</p>
           </div>
         ) : (
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>Finding</TableHead>
+                <TableHead>Note</TableHead>
                 <TableHead>Metric</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Author</TableHead>
@@ -268,7 +299,13 @@ export function ProjectFeed({
         )}
       </div>
 
-      <NoteDialog note={selected} onOpenChange={(open) => !open && setSelected(null)} />
+      <NoteDialog
+        note={selected}
+        allNotes={notes}
+        notesById={byId}
+        onSelect={setSelected}
+        onOpenChange={(open) => !open && setSelected(null)}
+      />
     </div>
   );
 }

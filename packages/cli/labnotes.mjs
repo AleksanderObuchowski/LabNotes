@@ -54,38 +54,40 @@ function requireToken() {
   }
 }
 
-async function cmdAdd(argv) {
-  requireToken();
-  const { flags, positional } = parseArgs(argv);
+const asArray = (v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]);
+
+// Drop undefined values; return undefined if nothing's left (avoids empty meta {}).
+function cleanMeta(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) if (v !== undefined) out[k] = v;
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Collect typed cross-note links from --confirms/--refutes/--satisfies/--related <id>
+// and generic --link rel:id (all repeatable).
+const RELS = ["confirms", "refutes", "satisfies", "related"];
+function collectRefs(flags) {
+  const refs = [];
+  for (const rel of RELS) {
+    for (const id of asArray(flags[rel]) ?? []) refs.push({ rel, id });
+  }
+  for (const spec of asArray(flags.link) ?? []) {
+    const [rel, id] = String(spec).split(":");
+    if (RELS.includes(rel) && id) refs.push({ rel, id });
+  }
+  return refs.length ? refs : undefined;
+}
+
+function titleFrom(positional, flags, kind) {
   const title = (positional.join(" ").trim() || flags.title || "").trim();
   if (!title) {
-    console.error('Usage: labnotes add "<title>" [--body "longer text"] [--metric m --value v --delta d --experiment e --tag t]');
+    console.error(`Error: a title is required. e.g. labnotes ${kind} "<title>" …`);
     process.exit(1);
   }
-  const text = flags.body ?? flags.text ?? flags.details;
+  return title;
+}
 
-  const repo = flags.repo ?? detectRepo();
-  if (!repo) {
-    console.error("Error: could not detect a GitHub repo. Pass --repo owner/name.");
-    process.exit(1);
-  }
-  const branch = flags.branch ?? git("rev-parse --abbrev-ref HEAD") ?? undefined;
-  const commit = flags.commit ?? git("rev-parse HEAD") ?? undefined;
-  const tags = flags.tag ? (Array.isArray(flags.tag) ? flags.tag : [flags.tag]) : undefined;
-
-  const body = {
-    repo,
-    title,
-    text: text || undefined,
-    metric: flags.metric,
-    value: flags.value !== undefined ? Number(flags.value) : undefined,
-    delta: flags.delta !== undefined ? Number(flags.delta) : undefined,
-    experiment: flags.experiment,
-    tags,
-    branch,
-    commit,
-  };
-
+async function postNote(body) {
   const res = await fetch(`${BASE}/api/v1/notes`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
@@ -97,7 +99,80 @@ async function cmdAdd(argv) {
     process.exit(1);
   }
   const note = await res.json();
-  console.log(`✓ logged to ${repo}${note.verified ? " (verified)" : " (unverified)"} — ${note.id}`);
+  const flag = note.kind === "finding" ? (note.verified ? " (verified)" : " (unverified)") : "";
+  console.log(`✓ ${note.kind} logged to ${body.repo}${flag} — ${note.id}`);
+}
+
+// finding (default) — a measured result/observation, tied to the current commit.
+async function cmdAdd(argv) {
+  requireToken();
+  const { flags, positional } = parseArgs(argv);
+  const title = titleFrom(positional, flags, "add");
+  const repo = flags.repo ?? detectRepo();
+  if (!repo) {
+    console.error("Error: could not detect a GitHub repo. Pass --repo owner/name.");
+    process.exit(1);
+  }
+  await postNote({
+    repo,
+    kind: "finding",
+    title,
+    text: flags.body ?? flags.text ?? flags.details ?? undefined,
+    metric: flags.metric,
+    value: flags.value !== undefined ? Number(flags.value) : undefined,
+    delta: flags.delta !== undefined ? Number(flags.delta) : undefined,
+    experiment: flags.experiment,
+    tags: asArray(flags.tag),
+    branch: flags.branch ?? git("rev-parse --abbrev-ref HEAD") ?? undefined,
+    commit: flags.commit ?? git("rev-parse HEAD") ?? undefined,
+    refs: collectRefs(flags),
+  });
+}
+
+// research — a hypothesis/claim distilled from the literature (no commit needed).
+async function cmdResearch(argv) {
+  requireToken();
+  const { flags, positional } = parseArgs(argv);
+  const title = titleFrom(positional, flags, "research");
+  const repo = flags.repo ?? detectRepo();
+  if (!repo) {
+    console.error("Error: could not detect a GitHub repo. Pass --repo owner/name.");
+    process.exit(1);
+  }
+  await postNote({
+    repo,
+    kind: "research",
+    title,
+    text: flags.body ?? flags.text ?? undefined,
+    experiment: flags.experiment,
+    tags: asArray(flags.tag),
+    meta: cleanMeta({ query: flags.query, tool: flags.tool, sources: asArray(flags.source) }),
+    refs: collectRefs(flags),
+  });
+}
+
+// devlog — the intent behind a code change, tied to the current commit.
+async function cmdDevlog(argv) {
+  requireToken();
+  const { flags, positional } = parseArgs(argv);
+  const title = titleFrom(positional, flags, "devlog");
+  const repo = flags.repo ?? detectRepo();
+  if (!repo) {
+    console.error("Error: could not detect a GitHub repo. Pass --repo owner/name.");
+    process.exit(1);
+  }
+  await postNote({
+    repo,
+    kind: "devlog",
+    title,
+    text: flags.body ?? flags.text ?? undefined,
+    experiment: flags.experiment,
+    tags: asArray(flags.tag),
+    branch: flags.branch ?? git("rev-parse --abbrev-ref HEAD") ?? undefined,
+    commit: flags.commit ?? git("rev-parse HEAD") ?? undefined,
+    meta: cleanMeta({ why: flags.why, approach: flags.approach, alternative: flags.alternative }),
+    refs: collectRefs(flags),
+  });
 }
 
 async function cmdDigest(argv) {
@@ -126,18 +201,27 @@ async function cmdDigest(argv) {
 function usage() {
   console.log(`labnotes — evidence-based experiment notes
 
-Usage:
-  labnotes add "<title>" [options]      Log a finding/observation (auto-detects repo/branch/commit)
-  labnotes digest [--project owner/repo] Print this project's findings as markdown
+Three note kinds mirror the research loop (auto-detect repo/branch/commit from git):
+  labnotes research "<title>" [options]  A hypothesis distilled from the literature
+  labnotes devlog   "<title>" [options]  The intent behind a code change
+  labnotes add      "<title>" [options]  A measured finding/observation (default)
+  labnotes digest   [--project owner/repo]  Print this project's notes as markdown
 
-Options for add:
-  --body <text>        longer details (optional)
-  --metric <name>      e.g. accuracy (optional)
-  --value <number>     absolute value, e.g. 0.92
-  --delta <number>     change, e.g. 0.03
-  --experiment <name>  groups related findings
+Common options:
+  --body <text>        longer details / markdown (optional)
+  --experiment <name>  groups related notes into one thread
   --tag <name>         repeatable
   --repo <owner/name>  override repo detection
+
+  add (finding):   --metric <name> --value <number> --delta <number>
+  research:        --query <text> --tool <arxiv|semantic|github|…> --source <citation> (repeatable)
+  devlog:          --why <text> --approach <text> --alternative <text>
+
+Linking (any kind, repeatable — <id> is a note id):
+  --confirms <id>  --refutes <id>  --satisfies <id>  --related <id>
+  --link <rel:id>  generic form, e.g. --link confirms:abc123
+
+  e.g.  labnotes add "Chunk 512 → +3% accuracy" --metric accuracy --delta 0.03 --confirms <researchId>
 
 Env:
   LABNOTES_URL   default http://localhost:3000
@@ -148,6 +232,12 @@ const [cmd, ...rest] = process.argv.slice(2);
 switch (cmd) {
   case "add":
     await cmdAdd(rest);
+    break;
+  case "research":
+    await cmdResearch(rest);
+    break;
+  case "devlog":
+    await cmdDevlog(rest);
     break;
   case "digest":
     await cmdDigest(rest);

@@ -2,12 +2,12 @@ import { resolveActor } from "@/lib/actor";
 import { commitExists, hasPushAccess, hasReadAccess, normalizeRepo } from "@/lib/github";
 import { apiError, json } from "@/lib/http";
 import { createNote, listNotes } from "@/lib/notes";
-import type { Note } from "@/lib/types";
+import { NOTE_KINDS, type Note, type NoteKind } from "@/lib/types";
 import { createNoteSchema } from "@/lib/validation";
 
 const NOTE_FIELDS: (keyof Note)[] = [
-  "id", "project_id", "author_login", "title", "text", "metric", "value", "delta",
-  "experiment", "tags", "branch", "commit_sha", "verified", "meta", "created_at",
+  "id", "project_id", "author_login", "kind", "title", "text", "metric", "value", "delta",
+  "experiment", "tags", "branch", "commit_sha", "verified", "refs", "meta", "created_at",
 ];
 
 function pickFields(param: string | null): (keyof Note)[] {
@@ -15,6 +15,10 @@ function pickFields(param: string | null): (keyof Note)[] {
   const requested = param.split(",").map((s) => s.trim());
   const picked = NOTE_FIELDS.filter((f) => requested.includes(f));
   return picked.length ? picked : NOTE_FIELDS;
+}
+
+function parseKind(param: string | null): NoteKind | undefined {
+  return param && NOTE_KINDS.includes(param as NoteKind) ? (param as NoteKind) : undefined;
 }
 
 export async function POST(req: Request) {
@@ -49,6 +53,7 @@ export async function POST(req: Request) {
   const note = await createNote({
     repoFullName,
     authorLogin: actor.login,
+    kind: data.kind,
     title: data.title,
     text: data.text ?? null,
     metric: data.metric ?? null,
@@ -58,6 +63,7 @@ export async function POST(req: Request) {
     tags: data.tags ?? [],
     branch: data.branch ?? null,
     commit: data.commit ?? null,
+    refs: data.refs ?? [],
     meta: data.meta ?? null,
     verified,
   });
@@ -85,6 +91,7 @@ export async function GET(req: Request) {
   const notes = await listNotes({
     repoFullName,
     q: sp.get("q") ?? undefined,
+    kind: parseKind(sp.get("kind")),
     metric: sp.get("metric") ?? undefined,
     experiment: sp.get("experiment") ?? undefined,
     tag: sp.get("tag") ?? undefined,

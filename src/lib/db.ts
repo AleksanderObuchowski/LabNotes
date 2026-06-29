@@ -37,6 +37,7 @@ export function ensureSchema(): Promise<void> {
           id TEXT PRIMARY KEY,
           project_id TEXT NOT NULL,
           author_login TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'finding',
           title TEXT NOT NULL DEFAULT '',
           text TEXT,
           metric TEXT,
@@ -47,6 +48,7 @@ export function ensureSchema(): Promise<void> {
           branch TEXT,
           commit_sha TEXT,
           verified INTEGER NOT NULL DEFAULT 0,
+          refs TEXT,
           meta TEXT,
           created_at INTEGER NOT NULL
         )`,
@@ -56,6 +58,8 @@ export function ensureSchema(): Promise<void> {
            ON notes(project_id, experiment)`,
         `CREATE INDEX IF NOT EXISTS idx_notes_project_metric
            ON notes(project_id, metric)`,
+        `CREATE INDEX IF NOT EXISTS idx_notes_project_kind
+           ON notes(project_id, kind)`,
         `CREATE TABLE IF NOT EXISTS api_tokens (
           id TEXT PRIMARY KEY,
           user_login TEXT NOT NULL,
@@ -72,9 +76,21 @@ export function ensureSchema(): Promise<void> {
       ],
       "write",
     );
-    // Migration for DBs created before `title` existed (ignore if present).
+    // Migrations for DBs created before a column existed (ignore if present).
     try {
       await c.execute(`ALTER TABLE notes ADD COLUMN title TEXT NOT NULL DEFAULT ''`);
+    } catch {
+      /* column already exists */
+    }
+    // `kind` discriminates findings (default) from research/devlog notes.
+    try {
+      await c.execute(`ALTER TABLE notes ADD COLUMN kind TEXT NOT NULL DEFAULT 'finding'`);
+    } catch {
+      /* column already exists */
+    }
+    // `refs` holds typed cross-note links: JSON [{ rel, id }].
+    try {
+      await c.execute(`ALTER TABLE notes ADD COLUMN refs TEXT`);
     } catch {
       /* column already exists */
     }
