@@ -1,0 +1,15 @@
+{
+  "name": "labnotes-cli",
+  "version": "0.1.0",
+  "description": "CLI to log and read evidence-based experiment findings from a git repo.",
+  "type": "module",
+  "bin": {
+    "labnotes": "./labnotes.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "labnotes.mjs"
+  ]
+}
