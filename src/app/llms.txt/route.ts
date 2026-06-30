@@ -95,6 +95,16 @@ POST ${base}/api/v1/notes
               "refs": [{ "rel": "satisfies", "id": "<researchNoteId>" }] }
   Returns 201 with the created note (incl. "id" and, for findings, "verified").
 
+### Update / delete a note (requires push access to the repo)
+PATCH  ${base}/api/v1/notes/<id>
+  Partial update — send only the fields to change. \`null\` clears a value, an
+  absent key leaves it untouched. Same field names as POST (minus "repo").
+  e.g.  { "metric": "accuracy", "value": 0.93, "delta": 0.04 }
+        { "title": "Revised claim", "refs": [{ "rel": "refutes", "id": "<id>" }] }
+  Returns the updated note. Changing "commit" re-runs soft verification.
+DELETE ${base}/api/v1/notes/<id>
+  Returns { "ok": true }. Other notes' links to a deleted id are simply skipped.
+
 ### Query notes as JSON (for programmatic use)
 GET ${base}/api/v1/notes?project=<owner>/<repo>
   Filters:  &q=<fulltext>  &kind=finding|research|devlog  &metric=<name>
@@ -136,6 +146,10 @@ The \`labnotes\` CLI auto-detects repo/branch/commit from local git:
       --body "Re-ran eval; 0.89 -> 0.92. Indexing +18%." \\
       --metric accuracy --value 0.92 --delta 0.03 \\
       --experiment rag-chunking --confirms <researchId>
+
+    # edit: correct or extend a note by id (only the flags you pass change)
+    labnotes edit <id> --value 0.93 --delta 0.04
+    labnotes rm <id>                                  # delete a note
 
 ## Recommended agent loop
 

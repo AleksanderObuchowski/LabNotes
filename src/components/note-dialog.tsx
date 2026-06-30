@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   ArrowDown,
   ArrowRight,
@@ -9,9 +11,12 @@ import {
   CircleDashed,
   CornerDownRight,
   CornerLeftUp,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { devlogMeta, researchMeta, NOTE_REL_LABELS, type Note } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Markdown } from "@/components/markdown";
 import { KindBadge, KIND_META } from "@/components/kind-badge";
@@ -73,15 +78,44 @@ export function NoteDialog({
   note,
   notesById,
   allNotes,
+  canWrite,
   onSelect,
+  onEdit,
   onOpenChange,
 }: {
   note: Note | null;
   notesById: Map<string, Note>;
   allNotes: Note[];
+  canWrite: boolean;
   onSelect: (n: Note) => void;
+  onEdit: (n: Note) => void;
   onOpenChange: (open: boolean) => void;
 }) {
+  const router = useRouter();
+  // Track which note the inline delete confirmation is armed for, so it resets
+  // automatically when a different note opens (no effect needed).
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const confirmDelete = !!note && confirmId === note.id;
+
+  async function onDelete() {
+    if (!note) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/v1/notes/${note.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `Failed to delete (${res.status})`);
+      }
+      toast.success("Note deleted");
+      onOpenChange(false);
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete note");
+    } finally {
+      setDeleting(false);
+    }
+  }
   // Outgoing links (this note's refs) and incoming backlinks (notes that point here).
   const outgoing = useMemo(
     () =>
@@ -224,6 +258,41 @@ export function NoteDialog({
                 <Field label="Commit"><span className="font-mono text-xs">{note.commit_sha.slice(0, 10)}</span></Field>
               ) : null}
             </div>
+
+            {canWrite ? (
+              <>
+                <Separator className="my-1" />
+                <div className="flex items-center justify-end gap-2">
+                  {confirmDelete ? (
+                    <>
+                      <span className="mr-auto text-sm text-muted-foreground">Delete this note?</span>
+                      <Button variant="ghost" size="sm" onClick={() => setConfirmId(null)} disabled={deleting}>
+                        Cancel
+                      </Button>
+                      <Button variant="destructive" size="sm" onClick={onDelete} disabled={deleting}>
+                        {deleting ? "Deleting…" : "Delete"}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          onEdit(note);
+                          onOpenChange(false);
+                        }}
+                      >
+                        <Pencil className="size-3.5" /> Edit
+                      </Button>
+                      <Button variant="destructive" size="sm" onClick={() => setConfirmId(note.id)}>
+                        <Trash2 className="size-3.5" /> Delete
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </>
+            ) : null}
           </>
         ) : null}
       </DialogContent>

@@ -7,6 +7,11 @@ export function projectId(repoFullName: string): string {
   return `github.com/${repoFullName}`;
 }
 
+// Inverse of projectId: 'github.com/org/repo' → 'org/repo'.
+export function repoFromProjectId(pid: string): string {
+  return pid.replace(/^github\.com\//, "");
+}
+
 function asKind(v: unknown): NoteKind {
   return NOTE_KINDS.includes(v as NoteKind) ? (v as NoteKind) : "finding";
 }
@@ -142,6 +147,105 @@ export async function createNote(input: CreateNoteInput): Promise<Note> {
     meta: input.meta ?? null,
     created_at,
   };
+}
+
+// Fetch a single note by id (used by the update/delete endpoints to resolve
+// the owning repo for the push-access check and to keep FTS in sync).
+export async function getNote(id: string): Promise<Note | null> {
+  await ensureSchema();
+  const res = await db().execute({ sql: `SELECT * FROM notes WHERE id = ?`, args: [id] });
+  return res.rows.length ? rowToNote(res.rows[0]) : null;
+}
+
+export type UpdateNoteInput = {
+  kind?: NoteKind;
+  title?: string;
+  text?: string | null;
+  metric?: string | null;
+  value?: number | null;
+  delta?: number | null;
+  experiment?: string | null;
+  tags?: string[] | null;
+  branch?: string | null;
+  commit?: string | null;
+  refs?: NoteRef[] | null;
+  meta?: Record<string, unknown> | null;
+  verified?: boolean;
+};
+
+// Partial update — only keys present in `input` change. Recomputes the FTS row
+// from the merged note so search stays in sync. Returns null if the id is unknown.
+export async function updateNote(id: string, input: UpdateNoteInput): Promise<Note | null> {
+  await ensureSchema();
+  const existing = await getNote(id);
+  if (!existing) return null;
+
+  const sets: string[] = [];
+  const args: (string | number | null)[] = [];
+  const set = (col: string, val: string | number | null) => {
+    sets.push(`${col} = ?`);
+    args.push(val);
+  };
+
+  if (input.kind !== undefined) set("kind", input.kind);
+  if (input.title !== undefined) set("title", input.title);
+  if (input.text !== undefined) set("text", input.text);
+  if (input.metric !== undefined) set("metric", input.metric);
+  if (input.value !== undefined) set("value", input.value);
+  if (input.delta !== undefined) set("delta", input.delta);
+  if (input.experiment !== undefined) set("experiment", input.experiment);
+  if (input.tags !== undefined) set("tags", input.tags && input.tags.length ? JSON.stringify(input.tags) : null);
+  if (input.branch !== undefined) set("branch", input.branch);
+  if (input.commit !== undefined) set("commit_sha", input.commit);
+  if (input.verified !== undefined) set("verified", input.verified ? 1 : 0);
+  if (input.refs !== undefined) set("refs", input.refs && input.refs.length ? JSON.stringify(input.refs) : null);
+  if (input.meta !== undefined) set("meta", input.meta ? JSON.stringify(input.meta) : null);
+
+  // Merge to compute the new FTS text and return the up-to-date note.
+  const pick = <T,>(v: T | undefined, fallback: T): T => (v !== undefined ? v : fallback);
+  const merged: Note = {
+    ...existing,
+    kind: pick(input.kind, existing.kind),
+    title: pick(input.title, existing.title),
+    text: pick(input.text, existing.text),
+    metric: pick(input.metric, existing.metric),
+    value: pick(input.value, existing.value),
+    delta: pick(input.delta, existing.delta),
+    experiment: pick(input.experiment, existing.experiment),
+    tags: input.tags !== undefined ? input.tags ?? [] : existing.tags,
+    branch: pick(input.branch, existing.branch),
+    commit_sha: pick(input.commit, existing.commit_sha),
+    verified: pick(input.verified, existing.verified),
+    refs: input.refs !== undefined ? input.refs ?? [] : existing.refs,
+    meta: pick(input.meta, existing.meta),
+  };
+
+  const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+  if (sets.length) {
+    stmts.push({ sql: `UPDATE notes SET ${sets.join(", ")} WHERE id = ?`, args: [...args, id] });
+  }
+  stmts.push({
+    sql: `UPDATE notes_fts SET text = ? WHERE note_id = ?`,
+    args: [ftsText(merged.title, merged.text, merged.meta), id],
+  });
+  await db().batch(stmts, "write");
+  return merged;
+}
+
+// Hard-delete a note and its FTS row. Other notes' refs that pointed here become
+// dangling, which the read paths already tolerate (links to missing ids are skipped).
+export async function deleteNote(id: string): Promise<boolean> {
+  await ensureSchema();
+  const existing = await getNote(id);
+  if (!existing) return false;
+  await db().batch(
+    [
+      { sql: `DELETE FROM notes WHERE id = ?`, args: [id] },
+      { sql: `DELETE FROM notes_fts WHERE note_id = ?`, args: [id] },
+    ],
+    "write",
+  );
+  return true;
 }
 
 export type ListNotesParams = {

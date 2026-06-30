@@ -175,6 +175,81 @@ async function cmdDevlog(argv) {
   });
 }
 
+async function patchNote(id, body) {
+  const res = await fetch(`${BASE}/api/v1/notes/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    console.error(`Failed (${res.status}): ${j.error ?? res.statusText}`);
+    process.exit(1);
+  }
+  const note = await res.json();
+  console.log(`✓ ${note.kind} updated — ${note.id}`);
+}
+
+// edit — partial update of an existing note by id. Only the flags you pass change.
+async function cmdEdit(argv) {
+  requireToken();
+  const { flags, positional } = parseArgs(argv);
+  const id = positional[0];
+  if (!id) {
+    console.error('Error: a note id is required. e.g. labnotes edit <id> --title "<new title>"');
+    process.exit(1);
+  }
+  const body = {};
+  const set = (k, v) => {
+    if (v !== undefined) body[k] = v;
+  };
+  set("kind", flags.kind);
+  set("title", flags.title ?? (positional.length > 1 ? positional.slice(1).join(" ") : undefined));
+  set("text", flags.body ?? flags.text ?? flags.details);
+  set("metric", flags.metric);
+  set("value", flags.value !== undefined ? Number(flags.value) : undefined);
+  set("delta", flags.delta !== undefined ? Number(flags.delta) : undefined);
+  set("experiment", flags.experiment);
+  set("tags", asArray(flags.tag));
+  set("branch", flags.branch);
+  set("commit", flags.commit);
+  set("meta", cleanMeta({
+    query: flags.query,
+    tool: flags.tool,
+    sources: asArray(flags.source),
+    why: flags.why,
+    approach: flags.approach,
+    alternative: flags.alternative,
+  }));
+  set("refs", collectRefs(flags));
+  if (Object.keys(body).length === 0) {
+    console.error("Error: nothing to update. Pass at least one field, e.g. --title or --metric.");
+    process.exit(1);
+  }
+  await patchNote(id, body);
+}
+
+// rm — delete a note by id.
+async function cmdDelete(argv) {
+  requireToken();
+  const { positional } = parseArgs(argv);
+  const id = positional[0];
+  if (!id) {
+    console.error("Error: a note id is required. e.g. labnotes rm <id>");
+    process.exit(1);
+  }
+  const res = await fetch(`${BASE}/api/v1/notes/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    console.error(`Failed (${res.status}): ${j.error ?? res.statusText}`);
+    process.exit(1);
+  }
+  console.log(`✓ note deleted — ${id}`);
+}
+
 async function cmdDigest(argv) {
   requireToken();
   const { flags } = parseArgs(argv);
@@ -205,6 +280,8 @@ Three note kinds mirror the research loop (auto-detect repo/branch/commit from g
   labnotes research "<title>" [options]  A hypothesis distilled from the literature
   labnotes devlog   "<title>" [options]  The intent behind a code change
   labnotes add      "<title>" [options]  A measured finding/observation (default)
+  labnotes edit     <id> [options]       Update fields of an existing note
+  labnotes rm       <id>                 Delete a note
   labnotes digest   [--project owner/repo]  Print this project's notes as markdown
 
 Common options:
@@ -238,6 +315,13 @@ switch (cmd) {
     break;
   case "devlog":
     await cmdDevlog(rest);
+    break;
+  case "edit":
+    await cmdEdit(rest);
+    break;
+  case "rm":
+  case "delete":
+    await cmdDelete(rest);
     break;
   case "digest":
     await cmdDigest(rest);

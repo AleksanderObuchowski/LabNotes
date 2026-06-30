@@ -4,7 +4,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, X } from "lucide-react";
 import { toast } from "sonner";
-import { NOTE_KINDS, NOTE_RELS, type Note, type NoteKind, type NoteRef } from "@/lib/types";
+import {
+  devlogMeta,
+  researchMeta,
+  NOTE_KINDS,
+  NOTE_RELS,
+  type Note,
+  type NoteKind,
+  type NoteRef,
+} from "@/lib/types";
 import { KIND_META } from "@/components/kind-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,16 +63,44 @@ const DEFAULT_REL: Record<NoteKind, (typeof NOTE_RELS)[number]> = {
   research: "related",
 };
 
-export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) {
+export function AddNoteDialog({
+  repo,
+  notes,
+  editNote,
+  open: controlledOpen,
+  onOpenChange,
+}: {
+  repo: string;
+  notes: Note[];
+  editNote?: Note;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const editMode = !!editNote;
+  const controlled = controlledOpen !== undefined;
+
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlled ? controlledOpen : internalOpen;
+  const setOpen = (o: boolean) => (controlled ? onOpenChange?.(o) : setInternalOpen(o));
+
   const [saving, setSaving] = useState(false);
-  const [kind, setKind] = useState<NoteKind>("finding");
-  const [links, setLinks] = useState<NoteRef[]>([]);
-  const [relDraft, setRelDraft] = useState<(typeof NOTE_RELS)[number]>("confirms");
+  const [kind, setKind] = useState<NoteKind>(editNote?.kind ?? "finding");
+  const [links, setLinks] = useState<NoteRef[]>(editNote?.refs ?? []);
+  const [relDraft, setRelDraft] = useState<(typeof NOTE_RELS)[number]>(
+    editNote ? DEFAULT_REL[editNote.kind] : "confirms",
+  );
   const [targetDraft, setTargetDraft] = useState<string>("");
 
+  // Prefill values for edit mode (inputs are uncontrolled; the parent remounts
+  // this dialog per note via a `key`, so defaultValue reflects the right note).
+  const rm = editNote ? researchMeta(editNote) : null;
+  const dm = editNote ? devlogMeta(editNote) : null;
+  // Can't link a note to itself.
+  const linkTargets = notes.filter((n) => n.id !== editNote?.id);
+
   function reset() {
+    if (editMode) return; // edit dialogs are remounted fresh per note
     setKind("finding");
     setLinks([]);
     setRelDraft("confirms");
@@ -94,65 +130,76 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
       return;
     }
     const text = String(fd.get("text") ?? "").trim();
+    // In edit mode, empty fields clear the value (send null); in create mode they're omitted.
+    const blank = editMode ? null : undefined;
     const num = (k: string) => {
       const v = String(fd.get(k) ?? "").trim();
-      return v === "" ? undefined : Number(v);
+      return v === "" ? blank : Number(v);
     };
     const str = (k: string) => {
       const v = String(fd.get(k) ?? "").trim();
-      return v === "" ? undefined : v;
+      return v === "" ? blank : v;
     };
     const tagsRaw = String(fd.get("tags") ?? "").trim();
-    const tags = tagsRaw ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+    const tags = tagsRaw ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean) : blank;
 
     // Kind-specific structured fields ride in `meta`.
-    let meta: Record<string, unknown> | undefined;
+    let meta: Record<string, unknown> | null | undefined;
     if (kind === "research") {
       const sourcesRaw = String(fd.get("sources") ?? "").trim();
       const sources = sourcesRaw ? sourcesRaw.split("\n").map((s) => s.trim()).filter(Boolean) : undefined;
-      meta = { query: str("query"), tool: str("tool"), sources };
+      meta = { query: str("query") ?? undefined, tool: str("tool") ?? undefined, sources };
     } else if (kind === "devlog") {
-      meta = { why: str("why"), approach: str("approach"), alternative: str("alternative") };
+      meta = {
+        why: str("why") ?? undefined,
+        approach: str("approach") ?? undefined,
+        alternative: str("alternative") ?? undefined,
+      };
     }
-    if (meta && Object.values(meta).every((v) => v === undefined)) meta = undefined;
+    if (meta && Object.values(meta).every((v) => v === undefined)) meta = blank;
 
     setSaving(true);
     try {
-      const res = await fetch("/api/v1/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          repo,
-          kind,
-          title,
-          text: text || undefined,
-          metric: kind === "finding" ? str("metric") : undefined,
-          value: kind === "finding" ? num("value") : undefined,
-          delta: kind === "finding" ? num("delta") : undefined,
-          experiment: str("experiment"),
-          tags,
-          branch: kind !== "research" ? str("branch") : undefined,
-          commit: kind !== "research" ? str("commit") : undefined,
-          refs: links.length ? links : undefined,
-          meta,
-        }),
-      });
+      const payload = {
+        ...(editMode ? {} : { repo }),
+        kind,
+        title,
+        text: text || blank,
+        metric: kind === "finding" ? str("metric") : blank,
+        value: kind === "finding" ? num("value") : blank,
+        delta: kind === "finding" ? num("delta") : blank,
+        experiment: str("experiment"),
+        tags,
+        branch: kind !== "research" ? str("branch") : blank,
+        commit: kind !== "research" ? str("commit") : blank,
+        refs: editMode ? links : links.length ? links : undefined,
+        meta,
+      };
+      const res = await fetch(
+        editMode ? `/api/v1/notes/${editNote!.id}` : "/api/v1/notes",
+        {
+          method: editMode ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error ?? `Request failed (${res.status})`);
       }
-      toast.success(`${COPY[kind].verb[0].toUpperCase()}${COPY[kind].verb.slice(1)} logged`);
+      toast.success(editMode ? "Note updated" : `${COPY[kind].verb[0].toUpperCase()}${COPY[kind].verb.slice(1)} logged`);
       setOpen(false);
       reset();
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to log ${COPY[kind].verb}`);
+      toast.error(err instanceof Error ? err.message : "Failed to save note");
     } finally {
       setSaving(false);
     }
   }
 
   const copy = COPY[kind];
+  const heading = editMode ? "Edit note" : copy.title;
 
   return (
     <Dialog
@@ -162,13 +209,15 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
         if (!o) reset();
       }}
     >
-      <DialogTrigger asChild>
-        <Button>Add note</Button>
-      </DialogTrigger>
+      {controlled ? null : (
+        <DialogTrigger asChild>
+          <Button>Add note</Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
         <form onSubmit={onSubmit}>
           <DialogHeader>
-            <DialogTitle>{copy.title}</DialogTitle>
+            <DialogTitle>{heading}</DialogTitle>
             <DialogDescription>
               {copy.desc} For <code>{repo}</code>.
             </DialogDescription>
@@ -186,7 +235,7 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
 
             <div className="grid gap-2">
               <Label htmlFor="title">Title</Label>
-              <Input id="title" name="title" required placeholder={copy.placeholder} />
+              <Input id="title" name="title" required placeholder={copy.placeholder} defaultValue={editNote?.title} />
             </div>
 
             <div className="grid gap-2">
@@ -199,6 +248,7 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
                 name="text"
                 placeholder="Longer notes, context, caveats, how you measured it…"
                 rows={4}
+                defaultValue={editNote?.text ?? ""}
               />
             </div>
 
@@ -207,15 +257,15 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
               <div className="grid grid-cols-3 gap-3">
                 <div className="grid gap-2">
                   <Label htmlFor="metric">Metric</Label>
-                  <Input id="metric" name="metric" placeholder="accuracy" />
+                  <Input id="metric" name="metric" placeholder="accuracy" defaultValue={editNote?.metric ?? ""} />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="value">Value</Label>
-                  <Input id="value" name="value" type="number" step="any" placeholder="0.92" />
+                  <Input id="value" name="value" type="number" step="any" placeholder="0.92" defaultValue={editNote?.value ?? ""} />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="delta">Delta</Label>
-                  <Input id="delta" name="delta" type="number" step="any" placeholder="0.03" />
+                  <Input id="delta" name="delta" type="number" step="any" placeholder="0.03" defaultValue={editNote?.delta ?? ""} />
                 </div>
               </div>
             ) : null}
@@ -226,18 +276,24 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="grid gap-2">
                     <Label htmlFor="query">Query</Label>
-                    <Input id="query" name="query" placeholder="optimal chunk size RAG" />
+                    <Input id="query" name="query" placeholder="optimal chunk size RAG" defaultValue={rm?.query ?? ""} />
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="tool">Tool</Label>
-                    <Input id="tool" name="tool" placeholder="arxiv" />
+                    <Input id="tool" name="tool" placeholder="arxiv" defaultValue={rm?.tool ?? ""} />
                   </div>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="sources">
                     Sources <span className="text-muted-foreground">(one per line)</span>
                   </Label>
-                  <Textarea id="sources" name="sources" rows={3} placeholder={"arXiv:2310.xxxxx\nhttps://…"} />
+                  <Textarea
+                    id="sources"
+                    name="sources"
+                    rows={3}
+                    placeholder={"arXiv:2310.xxxxx\nhttps://…"}
+                    defaultValue={rm?.sources?.join("\n") ?? ""}
+                  />
                 </div>
               </>
             ) : null}
@@ -247,15 +303,15 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
               <div className="grid gap-3">
                 <div className="grid gap-2">
                   <Label htmlFor="why">Why</Label>
-                  <Input id="why" name="why" placeholder="What problem this change addresses" />
+                  <Input id="why" name="why" placeholder="What problem this change addresses" defaultValue={dm?.why ?? ""} />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="approach">Approach</Label>
-                  <Input id="approach" name="approach" placeholder="What you changed, at the level of intent" />
+                  <Input id="approach" name="approach" placeholder="What you changed, at the level of intent" defaultValue={dm?.approach ?? ""} />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="alternative">Alternative considered</Label>
-                  <Input id="alternative" name="alternative" placeholder="What you didn't do and why" />
+                  <Input id="alternative" name="alternative" placeholder="What you didn't do and why" defaultValue={dm?.alternative ?? ""} />
                 </div>
               </div>
             ) : null}
@@ -263,11 +319,11 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-2">
                 <Label htmlFor="experiment">Experiment</Label>
-                <Input id="experiment" name="experiment" placeholder="rag-chunking" />
+                <Input id="experiment" name="experiment" placeholder="rag-chunking" defaultValue={editNote?.experiment ?? ""} />
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="tags">Tags</Label>
-                <Input id="tags" name="tags" placeholder="rag, prompt" />
+                <Input id="tags" name="tags" placeholder="rag, prompt" defaultValue={editNote?.tags.join(", ") ?? ""} />
               </div>
             </div>
 
@@ -275,11 +331,11 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-2">
                   <Label htmlFor="branch">Branch</Label>
-                  <Input id="branch" name="branch" placeholder="main" />
+                  <Input id="branch" name="branch" placeholder="main" defaultValue={editNote?.branch ?? ""} />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="commit">Commit SHA</Label>
-                  <Input id="commit" name="commit" placeholder="abc1234…" />
+                  <Input id="commit" name="commit" placeholder="abc1234…" defaultValue={editNote?.commit_sha ?? ""} />
                 </div>
               </div>
             ) : null}
@@ -307,7 +363,7 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
                   ))}
                 </div>
               ) : null}
-              {notes.length ? (
+              {linkTargets.length ? (
                 <div className="flex items-center gap-2">
                   <Select value={relDraft} onValueChange={(v) => setRelDraft(v as (typeof NOTE_RELS)[number])}>
                     <SelectTrigger size="sm" className="h-9 w-[130px]">
@@ -324,7 +380,7 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
                       <SelectValue placeholder="Pick a note…" />
                     </SelectTrigger>
                     <SelectContent>
-                      {notes.map((n) => (
+                      {linkTargets.map((n) => (
                         <SelectItem key={n.id} value={n.id}>
                           [{KIND_META[n.kind].label}] {n.title}
                         </SelectItem>
@@ -343,7 +399,7 @@ export function AddNoteDialog({ repo, notes }: { repo: string; notes: Note[] }) 
 
           <DialogFooter>
             <Button type="submit" disabled={saving}>
-              {saving ? "Saving…" : copy.title}
+              {saving ? "Saving…" : editMode ? "Save changes" : heading}
             </Button>
           </DialogFooter>
         </form>

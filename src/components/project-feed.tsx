@@ -11,11 +11,14 @@ import {
   FileText,
   GitBranch,
   Link2,
+  List,
   ListFilter,
+  Network,
   Search,
 } from "lucide-react";
 import { NOTE_KINDS, type Note, type NoteKind } from "@/lib/types";
 import { AddNoteDialog } from "@/components/add-note-dialog";
+import { ProjectGraph } from "@/components/project-graph";
 import { KindBadge, KIND_META } from "@/components/kind-badge";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -145,12 +148,14 @@ export function ProjectFeed({
   notes: Note[];
   canWrite: boolean;
 }) {
+  const [view, setView] = useState<"feed" | "graph">("feed");
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<NoteKind | typeof ALL>(ALL);
   const [metric, setMetric] = useState(ALL);
   const [verified, setVerified] = useState(ALL);
   const [grouped, setGrouped] = useState(false);
   const [selected, setSelected] = useState<Note | null>(null);
+  const [editing, setEditing] = useState<Note | null>(null);
 
   const byId = useMemo(() => new Map(notes.map((n) => [n.id, n])), [notes]);
   const metrics = useMemo(
@@ -210,7 +215,22 @@ export function ProjectFeed({
         {canWrite ? <AddNoteDialog repo={repo} notes={notes} /> : null}
       </div>
 
-      {/* Panel */}
+      {/* View switch: table feed vs. link graph */}
+      <Tabs value={view} onValueChange={(v) => setView(v as "feed" | "graph")}>
+        <TabsList>
+          <TabsTrigger value="feed" className="gap-1.5">
+            <List className="size-4" /> Feed
+          </TabsTrigger>
+          <TabsTrigger value="graph" className="gap-1.5">
+            <Network className="size-4" /> Graph
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {view === "graph" ? (
+        <ProjectGraph notes={notes} onSelect={setSelected} />
+      ) : (
+      /* Panel */
       <div className="rounded-xl border bg-card">
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-2 border-b p-3">
@@ -298,14 +318,28 @@ export function ProjectFeed({
           </Table>
         )}
       </div>
+      )}
 
       <NoteDialog
         note={selected}
         allNotes={notes}
         notesById={byId}
+        canWrite={canWrite}
         onSelect={setSelected}
+        onEdit={setEditing}
         onOpenChange={(open) => !open && setSelected(null)}
       />
+
+      {canWrite ? (
+        <AddNoteDialog
+          key={editing?.id ?? "new-edit"}
+          repo={repo}
+          notes={notes}
+          editNote={editing ?? undefined}
+          open={!!editing}
+          onOpenChange={(open) => !open && setEditing(null)}
+        />
+      ) : null}
     </div>
   );
 }
