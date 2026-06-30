@@ -22,6 +22,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+// Recognise a citation/source string and turn it into a link target.
+function sourceHref(s: string): string | null {
+  const url = s.match(/https?:\/\/[^\s)]+/);
+  if (url) return url[0];
+  const arxiv = s.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)/i);
+  if (arxiv) return `https://arxiv.org/abs/${arxiv[1]}`;
+  const doi = s.match(/\b(10\.\d{4,}\/[^\s)]+)/);
+  if (doi) return `https://doi.org/${doi[1]}`;
+  return null;
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4 py-1.5 text-sm">
@@ -129,9 +140,22 @@ export function NoteDialog({
                 {research.sources?.length ? (
                   <Field label="Sources">
                     <span className="flex flex-col items-end gap-0.5 font-mono text-xs">
-                      {research.sources.map((s, i) => (
-                        <span key={i}>{s}</span>
-                      ))}
+                      {research.sources.map((s, i) => {
+                        const href = sourceHref(s);
+                        return href ? (
+                          <a
+                            key={i}
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sky-400 underline decoration-dotted underline-offset-2 hover:text-sky-300"
+                          >
+                            {s}
+                          </a>
+                        ) : (
+                          <span key={i}>{s}</span>
+                        );
+                      })}
                     </span>
                   </Field>
                 ) : null}

@@ -44,7 +44,7 @@ const notes = [
     title: "Larger chunks should raise retrieval accuracy on long-form docs",
     text: "Distilled from the retrieval literature: fixed-window chunking at 256 tokens fragments arguments that span paragraphs, hurting recall on long-form QA. Several papers report monotonic gains up to ~512 tokens before precision starts to suffer.",
     exp: "rag-chunking", tags: ["rag", "hypothesis"], verified: 0, ago: 3,
-    meta: { query: "optimal chunk size retrieval augmented generation long documents", tool: "arxiv", sources: ["arXiv:2310.xxxxx (Chunk size ablations)", "arXiv:2307.yyyyy (Long-context RAG)"] } },
+    meta: { query: "optimal chunk size retrieval augmented generation long documents", tool: "arxiv", sources: ["arXiv:2307.03172 (Lost in the Middle)", "https://arxiv.org/abs/2312.06648 (Dense X retrieval)"] } },
   { id: DID, repo: "acme-ai/rag-pipeline", kind: "devlog",
     title: "Switch chunker to 512-token windows with 64 overlap",
     text: null, exp: "rag-chunking", tags: ["rag"], verified: 1, ago: 2,
