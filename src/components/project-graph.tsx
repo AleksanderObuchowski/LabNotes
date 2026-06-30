@@ -1,7 +1,7 @@
 "use client";
 
 import "@xyflow/react/dist/style.css";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   ArrowDown,
   ArrowRight,
@@ -17,6 +17,8 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  useEdgesState,
+  useNodesState,
   type Edge,
   type Node,
   type NodeProps,
@@ -176,6 +178,7 @@ function layout(notes: Note[], onSelect: (n: Note) => void): { nodes: Node[]; ed
       const srcX = x.get(n.id) ?? 0;
       const tgtX = x.get(r.id) ?? 0;
       const leftward = srcX > tgtX;
+      const animated = r.rel === "confirms" || r.rel === "satisfies";
       edges.push({
         id: `${n.id}-${i}-${r.id}`,
         source: n.id,
@@ -183,7 +186,9 @@ function layout(notes: Note[], onSelect: (n: Note) => void): { nodes: Node[]; ed
         sourceHandle: leftward ? "sl" : "sr",
         targetHandle: leftward ? "tr" : "tl",
         label: NOTE_REL_LABELS[r.rel],
-        animated: r.rel === "confirms" || r.rel === "satisfies",
+        animated,
+        // base style; hover-highlight derives from these via data.color/baseWidth.
+        data: { animated, color, baseWidth: 1.5 },
         style: { stroke: color, strokeWidth: 1.5 },
         labelStyle: { fill: color, fontSize: 11, fontWeight: 500 },
         labelBgStyle: { fill: "hsl(240 10% 12%)", fillOpacity: 0.85 },
@@ -223,8 +228,98 @@ function Legend() {
   );
 }
 
+type EdgeData = { animated: boolean; color: string; baseWidth: number };
+
+// Default / emphasized / dimmed edge styling, derived from the edge's stored base.
+function resetEdge(e: Edge): Edge {
+  const d = e.data as EdgeData;
+  return {
+    ...e,
+    animated: d.animated,
+    style: { ...e.style, stroke: d.color, strokeWidth: d.baseWidth, opacity: 1 },
+    labelStyle: { ...e.labelStyle, opacity: 1 },
+    labelBgStyle: { ...e.labelBgStyle, fillOpacity: 0.85 },
+    zIndex: 0,
+  };
+}
+function emphasizeEdge(e: Edge): Edge {
+  const d = e.data as EdgeData;
+  return {
+    ...e,
+    animated: d.animated,
+    style: { ...e.style, stroke: d.color, strokeWidth: 2.5, opacity: 1 },
+    labelStyle: { ...e.labelStyle, opacity: 1 },
+    labelBgStyle: { ...e.labelBgStyle, fillOpacity: 0.95 },
+    zIndex: 10,
+  };
+}
+function dimEdge(e: Edge): Edge {
+  return {
+    ...e,
+    animated: false,
+    style: { ...e.style, strokeWidth: 1, opacity: 0.08 },
+    labelStyle: { ...e.labelStyle, opacity: 0.06 },
+    labelBgStyle: { ...e.labelBgStyle, fillOpacity: 0.02 },
+    zIndex: 0,
+  };
+}
+
+// Adjacency (both directions) so hovering a node can light up its neighbours.
+function neighborMap(edges: Edge[]): Map<string, Set<string>> {
+  const m = new Map<string, Set<string>>();
+  const add = (a: string, b: string) => {
+    if (!m.has(a)) m.set(a, new Set());
+    m.get(a)!.add(b);
+  };
+  for (const e of edges) {
+    add(e.source, e.target);
+    add(e.target, e.source);
+  }
+  return m;
+}
+
 export function ProjectGraph({ notes, onSelect }: { notes: Note[]; onSelect: (n: Note) => void }) {
-  const { nodes, edges } = useMemo(() => layout(notes, onSelect), [notes, onSelect]);
+  const initial = useMemo(() => layout(notes, onSelect), [notes, onSelect]);
+  const neighbors = useMemo(() => neighborMap(initial.edges), [initial]);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
+
+  // Re-sync the canvas when the underlying notes change (edit / delete / add).
+  useEffect(() => {
+    setNodes(initial.nodes);
+    setEdges(initial.edges);
+  }, [initial, setNodes, setEdges]);
+
+  // Hover a node → emphasize its edges + neighbours, dim everything else.
+  const highlight = useCallback(
+    (hoveredId: string | null) => {
+      const nbrs = hoveredId ? neighbors.get(hoveredId) : null;
+      setEdges((eds) =>
+        eds.map((e) => {
+          if (!hoveredId) return resetEdge(e);
+          const on = e.source === hoveredId || e.target === hoveredId;
+          return on ? emphasizeEdge(e) : dimEdge(e);
+        }),
+      );
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.type !== "noteNode") return n;
+          const on = !hoveredId || n.id === hoveredId || !!nbrs?.has(n.id);
+          return { ...n, style: { ...n.style, opacity: on ? 1 : 0.3 } };
+        }),
+      );
+    },
+    [neighbors, setEdges, setNodes],
+  );
+
+  const onNodeMouseEnter = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      if (node.type === "noteNode") highlight(node.id);
+    },
+    [highlight],
+  );
+  const onNodeMouseLeave = useCallback(() => highlight(null), [highlight]);
 
   if (notes.length === 0) {
     return (
@@ -241,6 +336,10 @@ export function ProjectGraph({ notes, onSelect }: { notes: Note[]; onSelect: (n:
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onNodeMouseEnter={onNodeMouseEnter}
+        onNodeMouseLeave={onNodeMouseLeave}
         nodeTypes={nodeTypes}
         colorMode="dark"
         fitView
